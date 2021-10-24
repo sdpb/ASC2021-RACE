@@ -41,7 +41,7 @@ cd apex || exit 1
 
 git pull | grep -i "up to date" > /dev/null 2>&1
 banner "Modifying setup.py in the apex dir" warn
-sed -i 's/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/# check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/g'
+sed -i 's/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/# check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/g' setup.py
 
 APEX_UPDATED=$?
 
