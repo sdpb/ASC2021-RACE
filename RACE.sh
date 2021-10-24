@@ -54,7 +54,7 @@ else
 fi
 
 
-cd ../ASC2021-RACE || exit 1
+cd ../ || exit 1
 
 #banner "Run training"
 #./run.sh || exit 1
