@@ -21,7 +21,7 @@ import argparse
 import random
 from tqdm import tqdm, trange
 import csv
-import glob 
+import glob
 import json
 import apex
 import time
@@ -116,7 +116,7 @@ def read_race_examples(paths):
     examples = []
     for path in paths:
         filenames = glob.glob(path+"/*json")
-        for filename in filenames:
+        for filename in filenames[:100]:
             with open(filename, 'r', encoding='utf-8') as fpr:
                 data_raw = json.load(fpr)
                 article = data_raw['article']
@@ -136,8 +136,8 @@ def read_race_examples(paths):
                             ending_2 = options[2],
                             ending_3 = options[3],
                             label = truth))
-                
-    return examples 
+
+    return examples
 
 ## paths is a list containing all paths
 def read_race_example(filename):
@@ -176,8 +176,8 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
     #
     # The input will be like:
     # [CLS] Article [SEP] Question + Option [SEP]
-    # for each option 
-    # 
+    # for each option
+    #
     # The model will output a single value for each input. To get the
     # final decision of the model, we will run a softmax over these 4
     # outputs.
@@ -392,12 +392,16 @@ def main():
     if args.do_train:
         train_dir = os.path.join(args.data_dir, 'train')
         train_examples = read_race_examples([train_dir])
-        
+
         num_train_steps = int(len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
         print(len(train_examples), args.train_batch_size, args.gradient_accumulation_steps, args.num_train_epochs)
 
     config = AlbertConfig.from_pretrained(args.config_file, num_labels=4)
-    model = AlbertForMultipleChoice.from_pretrained(args.bert_model, config=config)    
+    model = AlbertForMultipleChoice.from_pretrained(args.bert_model, config=config)
+
+    for name, param in model.named_parameters():
+        if 'classifier' not in name:  # classifier layer
+            param.requires_grad = False
 
     model.to(device)
     # Prepare optimizer
@@ -509,7 +513,7 @@ def main():
     if is_main_process():
         dev_dir = os.path.join(args.data_dir, 'dev')
         dev_set = [dev_dir]
-    
+
         eval_examples = read_race_examples(dev_set)
         eval_features = convert_examples_to_features(
             eval_examples, tokenizer, args.max_seq_length, True)
@@ -531,30 +535,30 @@ def main():
         for step, batch in enumerate(eval_iter):
             batch = tuple(t.to(device) for t in batch)
             input_ids, input_mask, segment_ids, label_ids = batch
-    
+
             with torch.no_grad():
                 outputs = model(input_ids, input_mask, segment_ids, label_ids)
                 tmp_eval_loss = outputs[0]
                 outputs = model(input_ids, input_mask, segment_ids)
                 logits = outputs[0]
-    
+
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.to('cpu').numpy()
             tmp_eval_accuracy = accuracy(logits, label_ids)
-    
+
             eval_loss += tmp_eval_loss.mean().item()
             eval_accuracy += tmp_eval_accuracy
-    
+
             nb_eval_examples += input_ids.size(0)
             nb_eval_steps += 1
-    
+
         eval_loss = eval_loss / nb_eval_steps
         eval_accuracy = eval_accuracy / nb_eval_examples
-    
+
         result = {'dev_eval_loss': eval_loss,
                   'dev_eval_accuracy': eval_accuracy,
                   'loss': eval_loss/nb_eval_steps}
-    
+
         logger.info("***** Dev results *****")
         for key in sorted(result.keys()):
             logger.info("  %s = %s", key, str(result[key]))
