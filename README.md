@@ -25,7 +25,7 @@ You can modify the parameters and the code in the script and the source code acc
 
 while you use AWS env, you can run LE task with follow steps:
 
-1. Download data: `aws s3 sync s3://<S3BucketName>/LE/* ~/LE/`, Extract the tar.gz files to the specified directory
+1. Download data: `wget https://www.dropbox.com/s/koytfhsyw60ado6/LE.tar.gz`, Extract the tar.gz files to the specified directory
 2. Build Docker image: `cd source_code && docker build -t asc/le .`
 3. submit task `srun -N 1 -C gpu sudo docker run --gpus all -v ~/LE/source_code:/workspace/source_code --ipc=host asc/le:latest bash run.sh`
 4. submit task `srun -N 1 -C gpu sudo docker run --gpus all -v ~/LE/source_code:/workspace/source_code --ipc=host asc/le:latest bash eval.sh`
