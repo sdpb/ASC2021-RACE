@@ -30,8 +30,7 @@ pipenv install || exit 1
 banner "Git clone apex"
 if [ ! -d apex ]; then
 	git clone https://github.com/NVIDIA/apex.git
-	banner "First modify setup.py in the apex dir" warn
-	exit 0
+	#exit 0
 fi
 
 pipenv run python -c "from apex import amp" > /dev/null >&1
@@ -41,6 +40,8 @@ APEX_INSTALLED=$?
 cd apex || exit 1
 
 git pull | grep -i "up to date" > /dev/null 2>&1
+banner "Modifying setup.py in the apex dir" warn
+sed -i 's/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/# check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/g'
 
 APEX_UPDATED=$?
 
