@@ -1,5 +1,12 @@
 #!/bin/bash
 
+#
+# Open the link below before executing this script
+# https://www.youtube.com/watch?v=dQw4w9WgXcQ
+# ;)
+# This script requires pipenv in order to work better
+#
+
 function banner() {
     RED='\033[0;31m'
     YELLOW='\033[0;33m'
@@ -30,7 +37,6 @@ pipenv install || exit 1
 banner "Git clone apex"
 if [ ! -d apex ]; then
 	git clone https://github.com/NVIDIA/apex.git
-	#exit 0
 fi
 
 pipenv run python -c "from apex import amp" > /dev/null >&1
@@ -40,7 +46,11 @@ APEX_INSTALLED=$?
 cd apex || exit 1
 
 git pull | grep -i "up to date" > /dev/null 2>&1
+
+
 banner "Modifying setup.py in the apex dir" warn
+echo 's/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/# check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/g'
+
 sed -i 's/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/# check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/g' setup.py
 
 APEX_UPDATED=$?

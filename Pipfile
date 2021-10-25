@@ -13,6 +13,7 @@ boto3 = "==1.17.58"
 requests = "==2.25.1"
 ninja = "*"
 sentencepiece = "*"
+transformers = "*"
 
 [dev-packages]
 
