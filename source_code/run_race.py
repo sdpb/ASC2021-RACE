@@ -29,19 +29,37 @@ import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
+import torch.distributed as dist
+
 
 # from pytorch_pretrained_bert.tokenization import BertTokenizer
 # from pytorch_pretrained_bert.modeling import BertForMultipleChoice
 # from pytorch_pretrained_bert.optimization import BertAdam
 # from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-from pytorch_pretrained_bert.utils import is_main_process
-from pytorch_pretrained_bert import tokenization_albert
-from pytorch_pretrained_bert.modeling_albert import AlbertForMultipleChoice, AlbertConfig
+
+#from pytorch_pretrained_bert.utils import is_main_process
+#from pytorch_pretrained_bert import tokenization_albert
+#from pytorch_pretrained_bert.modeling_albert import AlbertForMultipleChoice, AlbertConfig
+
+from transformers import AlbertForMultipleChoice, AlbertTokenizerFast, AlbertConfig
+
 from tensorboardX import SummaryWriter
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt = '%m/%d/%Y %H:%M:%S',
                     level = logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def get_rank():
+    if not dist.is_available():
+        return 0
+    if not dist.is_initialized():
+        return 0
+    return dist.get_rank()
+
+
+def is_main_process():
+    return get_rank() == 0
 
 
 class RaceExample(object):
@@ -385,7 +403,8 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    tokenizer = tokenization_albert.FullTokenizer(args.vocab_file, do_lower_case=args.do_lower_case, spm_model_file=args.spm_model_file)
+    ## tokenizer = tokenization_albert.FullTokenizer(args.vocab_file, do_lower_case=args.do_lower_case, spm_model_file=args.spm_model_file)
+    tokenizer = AlbertTokenizerFast(args.spm_model_file, do_lower_case=args.do_lower_case)
 
     train_examples = None
     num_train_steps = None
@@ -475,7 +494,7 @@ def main():
                 batch = tuple(t.to(device) for t in batch)
                 input_ids, input_mask, segment_ids, label_ids = batch
                 outputs = model(input_ids, input_mask, segment_ids, labels=label_ids)
-                loss = outputs[0]
+                loss = outputs['loss']
                 if n_gpu > 1:
                     loss = loss.mean() # mean() to average on multi-gpu.
                 if args.gradient_accumulation_steps > 1:
@@ -538,9 +557,9 @@ def main():
 
             with torch.no_grad():
                 outputs = model(input_ids, input_mask, segment_ids, label_ids)
-                tmp_eval_loss = outputs[0]
+                tmp_eval_loss = outputs['loss']
                 outputs = model(input_ids, input_mask, segment_ids)
-                logits = outputs[0]
+                logits = outputs['logits']
 
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.to('cpu').numpy()
