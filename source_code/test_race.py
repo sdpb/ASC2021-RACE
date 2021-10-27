@@ -34,15 +34,30 @@ from torch.utils.data.distributed import DistributedSampler
 # from pytorch_pretrained_bert.modeling import BertForMultipleChoice
 # from pytorch_pretrained_bert.optimization import BertAdam
 # from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-from pytorch_pretrained_bert.utils import is_main_process
-from pytorch_pretrained_bert import tokenization_albert
-from pytorch_pretrained_bert.modeling_albert import AlbertForMultipleChoice, AlbertConfig
+#=============================================================================#
+#from pytorch_pretrained_bert.utils import is_main_process
+#from pytorch_pretrained_bert import tokenization_albert
+#from pytorch_pretrained_bert.modeling_albert import AlbertForMultipleChoice, AlbertConfig
+#=============================================================================#
+from torch import distributed as dist
+from transformers import AlbertForMultipleChoice, AlbertTokenizerFast, AlbertConfig
+
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt = '%m/%d/%Y %H:%M:%S',
                     level = logging.INFO)
 logger = logging.getLogger(__name__)
 
+def get_rank():
+    if not dist.is_available():
+        return 0
+    if not dist.is_initialized():
+        return 0
+    return dist.get_rank()
+
+
+def is_main_process():
+    return get_rank() == 0
 
 class RaceExample(object):
     """A single training/test example for the RACE dataset."""
@@ -126,7 +141,7 @@ def read_race_examples(paths):
                 article = data_raw['article']
                 ## for each qn
                 for i in range(len(data_raw['answers'])):
-                    truth = ord(data_raw['answers'][i]) - ord('A')
+                    #truth = ord(data_raw['answers'][i]) - ord('A')
                     question = data_raw['questions'][i]
                     options = data_raw['options'][i]
                     examples.append(
@@ -138,9 +153,8 @@ def read_race_examples(paths):
                             ending_0 = options[0],
                             ending_1 = options[1],
                             ending_2 = options[2],
-                            ending_3 = options[3],
-                            label = truth))
-                
+                            ending_3 = options[3], ))
+                            #label = truth))
     return examples 
 
 ## paths is a list containing all paths
@@ -151,6 +165,8 @@ def read_race_example(filename):
         article = data_raw['article']
         ## for each qn
         for i in range(len(data_raw['answers'])):
+            #print(f"answers full: {data_raw['answers']}")
+            #print(f"answers[i]: {data_raw['answers'][i]}")
             truth = ord(data_raw['answers'][i]) - ord('A')
             question = data_raw['questions'][i]
             options = data_raw['options'][i]
@@ -337,11 +353,11 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    tokenizer = tokenization_albert.FullTokenizer(args.vocab_file, do_lower_case=args.do_lower_case, spm_model_file=args.spm_model_file)
+    tokenizer = AlbertTokenizerFast(args.spm_model_file, do_lower_case=args.do_lower_case)
 
 
     config = AlbertConfig.from_pretrained(args.config_file, num_labels=4)
-    model = AlbertForMultipleChoice.from_pretrained(args.bert_model, config=config)    
+    model = AlbertForMultipleChoice.from_pretrained(args.pretrained_model, config=config)    
 
     model.to(device)
 
@@ -350,8 +366,8 @@ def main():
         test_dir = os.path.join(args.data_dir, 'test')
         results = {}
         for fid in range(500):
-            s = str(fid).zfill(5)
-            fname = test_dir+'/asc'+s+'.txt'
+            s = str(fid).zfill(4)
+            fname = test_dir+'/asc'+s+'.json'
             eval_examples = read_race_example(fname)
             eval_features = convert_examples_to_features(eval_examples, tokenizer, args.max_seq_length, True)
             all_input_ids = torch.tensor(select_field(eval_features, 'input_ids'), dtype=torch.long)
