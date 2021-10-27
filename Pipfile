@@ -3,15 +3,16 @@ url = "https://pypi.org/simple"
 verify_ssl = true
 name = "pypi"
 
+[[source]]
+url = "https://download.pytorch.org/whl/cu113/torch_stable.html"
+verify_ssl = true
+name = "pytorch"
+
 [packages]
-tensorboardX = "==2.2"
-torch = "==1.8.1"
-torchaudio = "==0.8.1"
-torchvision = "==0.9.1"
+ninja = "*"
 tqdm = "==4.60.0"
 boto3 = "==1.17.58"
 requests = "==2.25.1"
-ninja = "*"
 sentencepiece = "*"
 transformers = "*"
 
@@ -19,4 +20,3 @@ transformers = "*"
 
 [requires]
 python_version = "3"
-

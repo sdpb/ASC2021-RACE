@@ -34,6 +34,13 @@ git pull
 banner "Installing dependencies"
 pipenv install || exit 1
 
+banner "Installing PyTorch"
+pipenv run pip install torch==1.10.0+cu113 torchvision==0.11.1+cu113 torchaudio==0.10.0+cu113 -f https://download.pytorch.org/whl/cu113/torch_stable.html || exit 1
+
+sudo yum install -y libaio-devel python3-devel
+banner "Installing DeepSpeed"
+DS_BUILD_OPS=1 pipenv run pip install --no-cache-dir deepspeed || exit 1
+
 banner "Git clone apex"
 if [ ! -d apex ]; then
 	git clone https://github.com/NVIDIA/apex.git
