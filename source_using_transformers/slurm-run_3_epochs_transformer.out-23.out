@@ -1,0 +1,4 @@
+  File "run_race.py", line 227
+    segment_ids = [0] * (len(context_tokens_choice) + 2) +
+                                                         ^
+SyntaxError: invalid syntax
