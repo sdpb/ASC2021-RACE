@@ -27,6 +27,8 @@ import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 import torch.distributed as dist
+from accelerate import Accelerator
+
 
 # WHEN USING ASC ORIGINAL VERSION
 # from pytorch_pretrained_bert.utils import is_main_process
@@ -34,7 +36,7 @@ import torch.distributed as dist
 # from pytorch_pretrained_bert.modeling_albert import AlbertForMultipleChoice, AlbertConfig
 
 # USING TRANSFORMERS
-from transformers import AlbertForMultipleChoice, AlbertTokenizerFast, AlbertConfig
+from transformers import AlbertForMultipleChoice, AlbertTokenizerFast, AlbertConfig, AdamW, get_linear_schedule_with_warmup
 
 from tensorboardX import SummaryWriter
 
@@ -113,16 +115,9 @@ class RaceExample(object):
 
 
 class InputFeatures(object):
-    def __init__(self, example_id, choices_features, label):
+    def __init__(self, example_id, batch, label):
         self.example_id = example_id
-        self.choices_features = [
-            {
-                "input_ids": input_ids,
-                "input_mask": input_mask,
-                "segment_ids": segment_ids,
-            }
-            for _, input_ids, input_mask, segment_ids in choices_features
-        ]
+        self.batch = batch
         self.label = label
 
 
@@ -131,7 +126,7 @@ def read_race_examples(paths):
     examples = []
     for path in paths:
         filenames = glob.glob(path + "/*json")
-        for filename in filenames[:4000]:
+        for filename in filenames[:1]:
             with open(filename, "r", encoding="utf-8") as fpr:
                 data_raw = json.load(fpr)
                 article = data_raw["article"]
@@ -202,19 +197,26 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length, is_trainin
     features = []
     examples_iter = tqdm(examples, disable=False) if is_main_process() else examples
     for example_index, example in enumerate(examples_iter):
-        context_tokens = tokenizer.tokenize(example.context_sentence)
-        start_ending_tokens = tokenizer.tokenize(example.start_ending)
+        context_tokens = example.context_sentence # tokenizer.tokenize(example.context_sentence)
+        start_ending_tokens = example.start_ending # tokenizer.tokenize(example.start_ending)
 
-        choices_features = []
         for ending_index, ending in enumerate(example.endings):
             # We create a copy of the context tokens in order to be
             # able to shrink it according to ending_tokens
             context_tokens_choice = context_tokens[:]
-            ending_tokens = start_ending_tokens + tokenizer.tokenize(ending)
+            ending_tokens = start_ending_tokens + " " + ending # tokenizer.tokenize(ending)
+
             # Modifies `context_tokens_choice` and `ending_tokens` in
             # place so that the total length is less than the
             # specified length.  Account for [CLS], [SEP], [SEP] with
             # "- 3"
+
+
+            feature = tokenizer(context_tokens_choice, ending_tokens, return_tensors="pt", padding='max_length', truncation=True, max_length=max_seq_length)
+            label = example.label
+            feature["labels"] = label
+   
+            """
             _truncate_seq_pair(context_tokens_choice, ending_tokens, max_seq_length - 3)
 
             tokens = (
@@ -240,13 +242,12 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length, is_trainin
             assert len(input_mask) == max_seq_length
             assert len(segment_ids) == max_seq_length
 
-            choices_features.append((tokens, input_ids, input_mask, segment_ids))
+            """
 
-        label = example.label
         features.append(
             InputFeatures(
                 example_id=example.race_id,
-                choices_features=choices_features,
+                batch=feature,
                 label=label,
             )
         )
@@ -271,6 +272,7 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
             tokens_b.pop()
 
 
+
 def accuracy(out, labels):
     outputs = np.argmax(out, axis=1)
     return np.sum(outputs == labels)
@@ -278,7 +280,7 @@ def accuracy(out, labels):
 
 def select_field(features, field):
     return [
-        [choice[field] for choice in feature.choices_features] for feature in features
+        [choice[field] for choice in feature.batch] for feature in features
     ]
 
 
@@ -286,6 +288,12 @@ def warmup_linear(x, warmup=0.002):
     if x < warmup:
         return x / warmup
     return 1.0 - x
+
+
+def PRINT_DEBUG(var):
+    print(f"DEBUG::: -- TYPE: {type(var)} -- DATA: {var}\nEXITING...")
+    exit()
+
 
 
 def main():
@@ -422,25 +430,27 @@ def main():
 
     args = parser.parse_args()
 
+    accelerator = Accelerator(device_placement=True)
+    n_gpu = 1
     # INICIALMENTE SE ENTRA A ESTE IF:
-    if args.local_rank == -1 or args.no_cuda:
-        device = torch.device(
-            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
-        )
-        n_gpu = torch.cuda.device_count()
-    else:
-        torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
-        n_gpu = 1
-        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.distributed.init_process_group(backend="nccl")
+    #if args.local_rank == -1 or args.no_cuda:
+    #    device = torch.device(
+    #        "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+    #    )
+    #    n_gpu = torch.cuda.device_count()
+    #else:
+    #    torch.cuda.set_device(args.local_rank)
+    #    device = torch.device("cuda", args.local_rank)
+    #    n_gpu = 1
+    #    # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+    #    torch.distributed.init_process_group(backend="nccl")
 
-    if is_main_process():
-        logger.info(
-            "device: {} n_gpu: {}, distributed training: {}, 16-bits training: {}".format(
-                device, n_gpu, bool(args.local_rank != -1), args.fp16
-            )
-        )
+    #if is_main_process():
+    #    logger.info(
+    #        "device: {} n_gpu: {}, distributed training: {}, 16-bits training: {}".format(
+    #            device, n_gpu, bool(args.local_rank != -1), args.fp16
+    #        )
+    #    )
 
     if args.gradient_accumulation_steps < 1:
         raise ValueError(
@@ -471,6 +481,8 @@ def main():
     tokenizer = AlbertTokenizerFast(
         args.spm_model_file, do_lower_case=args.do_lower_case
     )
+    def collate_fn(examples):
+        return tokenizer.pad(examples, padding="longest", return_tensors="pt")
 
     train_examples = None
     num_train_steps = None
@@ -500,7 +512,8 @@ def main():
     #        if 'classifier' not in name:  # classifier layer
     #            param.requires_grad = False
 
-    model.to(device)
+    model.to(accelerator.device)
+    
     # Prepare optimizer
     param_optimizer = list(model.named_parameters())
 
@@ -545,21 +558,22 @@ def main():
             loss_scale="dynamic" if args.loss_scale == 0 else args.loss_scale,
         )
     else:
+        optimizer = AdamW(params=optimizer_grouped_parameters, lr=args.learning_rate, correct_bias=True)
+        '''
         optimizer = BertAdam(
             optimizer_grouped_parameters,
             lr=args.learning_rate,
             warmup=args.warmup_proportion,
             t_total=t_total,
         )
+        '''
+
+
 
     global_step = 0
     train_start = time.time()
     writer = SummaryWriter(os.path.join(args.output_dir, "asc"))
     if args.do_train:
-        # train_dir = os.path.join(args.data_dir, 'train')
-        # train_set = [train_dir]
-
-        # train_examples = read_race_examples(train_set)
         train_features = convert_examples_to_features(
             train_examples, tokenizer, args.max_seq_length, True
         )
@@ -568,67 +582,84 @@ def main():
             logger.info("  Num examples = %d", len(train_examples))
             logger.info("  Batch size = %d", args.train_batch_size)
             logger.info("  Num steps = %d", num_train_steps)
-        all_input_ids = torch.tensor(
-            select_field(train_features, "input_ids"), dtype=torch.long
-        )
-        all_input_mask = torch.tensor(
-            select_field(train_features, "input_mask"), dtype=torch.long
-        )
-        all_segment_ids = torch.tensor(
-            select_field(train_features, "segment_ids"), dtype=torch.long
-        )
-        all_label = torch.tensor([f.label for f in train_features], dtype=torch.long)
-        train_data = TensorDataset(
-            all_input_ids, all_input_mask, all_segment_ids, all_label
-        )
-        train_sampler = RandomSampler(train_data)
+        #all_input_ids = torch.tensor([feature.batch["input_ids"] for feature in train_features], dtype=torch.long)
+        #all_input_mask = torch.tensor([feature.batch["attention_mask"] for feature in train_features], dtype=torch.long)
+        #all_segment_ids = torch.tensor([feature.batch["token_type_ids"] for feature in train_features], dtype=torch.long)
+      
+        #all_label = torch.tensor([f.label for f in train_features], dtype=torch.long)
+
+
+        #train_data = TensorDataset(
+        #    all_input_ids, all_input_mask, all_segment_ids, all_label
+        #)
+        #train_sampler = RandomSampler(train_data)
         train_dataloader = DataLoader(
-            train_data, sampler=train_sampler, batch_size=args.train_batch_size
+            [b.batch for b in train_features], shuffle=False, batch_size=args.train_batch_size, collate_fn=collate_fn
+        )
+
+        model, optimizer, train_dataloader = accelerator.prepare(model, optimizer, train_dataloader)
+
+        # Instantiate learning rate scheduler after preparing the training dataloader as the prepare method
+        # may change its length.
+        lr_scheduler = get_linear_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=100,
+            num_training_steps=len(train_dataloader) * int(args.num_train_epochs),
         )
 
         model.train()
         for ep in range(int(args.num_train_epochs)):
             tr_loss = 0
             nb_tr_examples, nb_tr_steps = 0, 0
-            train_iter = (
-                tqdm(train_dataloader, disable=False)
-                if is_main_process()
-                else train_dataloader
-            )
-            if is_main_process():
-                train_iter.set_description(
-                    "Trianing Epoch: {}/{}".format(ep + 1, int(args.num_train_epochs))
-                )
-            for step, batch in enumerate(train_iter):
-                batch = tuple(t.to(device) for t in batch)
-                input_ids, input_mask, segment_ids, label_ids = batch
-                outputs = model(input_ids, input_mask, segment_ids, labels=label_ids)
-                loss = outputs["loss"]
-                if n_gpu > 1:
-                    loss = loss.mean()  # mean() to average on multi-gpu.
-                if args.gradient_accumulation_steps > 1:
-                    loss = loss / args.gradient_accumulation_steps
-                tr_loss += loss.item()
-                nb_tr_examples += input_ids.size(0)
-                nb_tr_steps += 1
+            #train_iter = (
+            #    tqdm(train_dataloader, disable=False)
+            #    if is_main_process()
+            #    else train_dataloader
+            #)
+            #if is_main_process():
+            #    train_iter.set_description(
+            #        "Trianing Epoch: {}/{}".format(ep + 1, int(args.num_train_epochs))
+            #    )
+            for index, batch in enumerate(train_dataloader):
+                # PRINT_DEBUG(batch)
+                #batch = dict(t.to(device) for t in batch)
+                #input_ids, input_mask, segment_ids, label_ids = batch
+                #outputs = model(input_ids, input_mask, segment_ids, labels=label_ids)
+                #loss = outputs["loss"]
+                #if n_gpu > 1:
+                #    loss = loss.mean()  # mean() to average on multi-gpu.
+                #if args.gradient_accumulation_steps > 1:
+                #    loss = loss / args.gradient_accumulation_steps
+                #tr_loss += loss.item()
+                #nb_tr_examples += input_ids.size(0)
+                #nb_tr_steps += 1
+
+                # We could avoid this line since we set the accelerator with `device_placement=True`.
+                #print(f"TYPE:{type(batch)} -- BATCH:{batch}")
+                # batch.to(accelerator.device)
+
+                # outputs = model(**{k: v.unsqueeze(0) for k,v in batch.items()})
+                outputs = model(**batch)
+                loss = outputs.loss
+                loss = loss / args.gradient_accumulation_steps
 
                 if args.fp16:
                     with amp.scale_loss(loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
+                        #scaled_loss.backward()
+                        accelerator.backward(scaled_loss)
                 else:
-                    loss.backward()
-                if (step + 1) % args.gradient_accumulation_steps == 0:
-                    # modify learning rate with special warm up BERT uses
-                    lr_this_step = args.learning_rate * warmup_linear(
-                        global_step / t_total, args.warmup_proportion
-                    )
-                    for param_group in optimizer.param_groups:
-                        param_group["lr"] = lr_this_step
+                    exit()
+                    #loss.backward()
+                    accelerator.backward(loss)
+
+                if (step+1) % gradient_accumulation_steps == 0:
                     optimizer.step()
+                    lr_scheduler.step()
                     optimizer.zero_grad()
                     global_step += 1
-                if is_main_process():
-                    train_iter.set_postfix(loss=loss.item())
+
+               # if is_main_process():
+               #     train_iter.set_postfix(loss=loss.item())
                 writer.add_scalar("loss", loss.item(), global_step=global_step)
 
     finish_time = time.time()
@@ -689,7 +720,6 @@ def main():
 
             with torch.no_grad():
                 outputs = model(input_ids, input_mask, segment_ids, label_ids)
-                print(f"OUTPUTS:: {outputs}")
                 tmp_eval_loss = outputs["logits"]
                 outputs = model(input_ids, input_mask, segment_ids)
                 logits = outputs["logits"]
