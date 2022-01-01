@@ -25,7 +25,7 @@ import json
 import time
 import numpy as np
 import torch
-from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler, Dataset
 import torch.distributed as dist
 from accelerate import Accelerator
 
@@ -36,7 +36,7 @@ from accelerate import Accelerator
 # from pytorch_pretrained_bert.modeling_albert import AlbertForMultipleChoice, AlbertConfig
 
 # USING TRANSFORMERS
-from transformers import AlbertForMultipleChoice, AlbertTokenizerFast, AlbertConfig, AdamW, get_linear_schedule_with_warmup
+from transformers import AlbertForMultipleChoice, AlbertTokenizerFast, AlbertConfig, AdamW, get_linear_schedule_with_warmup, default_data_collator
 
 from tensorboardX import SummaryWriter
 
@@ -214,7 +214,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length, is_trainin
 
             feature = tokenizer(context_tokens_choice, ending_tokens, return_tensors="pt", padding='max_length', truncation=True, max_length=max_seq_length)
             label = example.label
-            feature["labels"] = label
+            #feature["labels"] = torch.tensor(label).unsqueeze(0)
    
             """
             _truncate_seq_pair(context_tokens_choice, ending_tokens, max_seq_length - 3)
@@ -290,11 +290,23 @@ def warmup_linear(x, warmup=0.002):
     return 1.0 - x
 
 
-def PRINT_DEBUG(var):
+def PRINT_DEBUG(var, exit=True):
     print(f"DEBUG::: -- TYPE: {type(var)} -- DATA: {var}\nEXITING...")
-    exit()
+    if exit:
+        exit()
 
 
+class dataVISA(Dataset):
+    def __init__(self, batches, labels): # batches and labels are a list
+        self.batches = batches
+        self.labels = labels
+        assert len(self.labels) == len(self.batches)
+
+    def __len__(self):
+        return len(self.batches)
+
+    def __getitem__(self, idx):
+        return self.batches[idx], self.labels[idx]
 
 def main():
     ete_start = time.time()
@@ -464,11 +476,12 @@ def main():
         args.train_batch_size / args.gradient_accumulation_steps
     )
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
+    # TRYING TO SOLVE RuntimeError: CUDA error: device-side assert triggered:
+    #random.seed(args.seed)
+    #np.random.seed(args.seed)
+    #torch.manual_seed(args.seed)
+    #if n_gpu > 0:
+    #    torch.cuda.manual_seed_all(args.seed)
 
     if not args.do_train and not args.do_eval:
         raise ValueError("At least one of `do_train` or `do_eval` must be True.")
@@ -483,6 +496,7 @@ def main():
     )
     def collate_fn(examples):
         return tokenizer.pad(examples, padding="longest", return_tensors="pt")
+
 
     train_examples = None
     num_train_steps = None
@@ -582,19 +596,14 @@ def main():
             logger.info("  Num examples = %d", len(train_examples))
             logger.info("  Batch size = %d", args.train_batch_size)
             logger.info("  Num steps = %d", num_train_steps)
-        #all_input_ids = torch.tensor([feature.batch["input_ids"] for feature in train_features], dtype=torch.long)
-        #all_input_mask = torch.tensor([feature.batch["attention_mask"] for feature in train_features], dtype=torch.long)
-        #all_segment_ids = torch.tensor([feature.batch["token_type_ids"] for feature in train_features], dtype=torch.long)
-      
-        #all_label = torch.tensor([f.label for f in train_features], dtype=torch.long)
-
-
-        #train_data = TensorDataset(
-        #    all_input_ids, all_input_mask, all_segment_ids, all_label
-        #)
-        #train_sampler = RandomSampler(train_data)
+        
+        #all_batches = [b.batch for b in train_features]
+        #PRINT_DEBUG(all_batches[0])
+        #train_data = TensorDataset(torch.tensor(**all_batches), torch.tensor([b.label for b in train_features]))
+        all_batches = [b.batch for b in train_features]
+        train_data = dataVISA(all_batches, [b.label for b in train_features])
         train_dataloader = DataLoader(
-            [b.batch for b in train_features], shuffle=False, batch_size=args.train_batch_size, collate_fn=collate_fn
+            train_data, shuffle=False, batch_size=args.train_batch_size, #collate_fn=collate_fn
         )
 
         model, optimizer, train_dataloader = accelerator.prepare(model, optimizer, train_dataloader)
@@ -639,8 +648,10 @@ def main():
                 # batch.to(accelerator.device)
 
                 # outputs = model(**{k: v.unsqueeze(0) for k,v in batch.items()})
+                PRINT_DEBUG(batch, False)
+                batch = batch[0]
                 outputs = model(**batch)
-                loss = outputs.loss
+                loss = outputs.logits
                 loss = loss / args.gradient_accumulation_steps
 
                 if args.fp16:
@@ -648,11 +659,11 @@ def main():
                         #scaled_loss.backward()
                         accelerator.backward(scaled_loss)
                 else:
-                    exit()
+                    #exit()
                     #loss.backward()
                     accelerator.backward(loss)
 
-                if (step+1) % gradient_accumulation_steps == 0:
+                if (index+1) % args.gradient_accumulation_steps == 0:
                     optimizer.step()
                     lr_scheduler.step()
                     optimizer.zero_grad()
@@ -688,24 +699,13 @@ def main():
         logger.info("***** Running evaluation: Dev *****")
         logger.info("  Num examples = %d", len(eval_examples))
         logger.info("  Batch size = %d", args.eval_batch_size)
-        all_input_ids = torch.tensor(
-            select_field(eval_features, "input_ids"), dtype=torch.long
-        )
-        all_input_mask = torch.tensor(
-            select_field(eval_features, "input_mask"), dtype=torch.long
-        )
-        all_segment_ids = torch.tensor(
-            select_field(eval_features, "segment_ids"), dtype=torch.long
-        )
-        all_label = torch.tensor([f.label for f in eval_features], dtype=torch.long)
-        eval_data = TensorDataset(
-            all_input_ids, all_input_mask, all_segment_ids, all_label
-        )
+        
         # Run prediction for full data
         eval_sampler = SequentialSampler(eval_data)
         eval_dataloader = DataLoader(
-            eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size
+            [b.batch for b in eval_features], sampler=eval_sampler, batch_size=args.eval_batch_size
         )
+
         eval_iter = (
             tqdm(eval_dataloader, disable=False)
             if is_main_process()
@@ -715,14 +715,15 @@ def main():
         eval_loss, eval_accuracy = 0, 0
         nb_eval_steps, nb_eval_examples = 0, 0
         for step, batch in enumerate(eval_iter):
-            batch = tuple(t.to(device) for t in batch)
-            input_ids, input_mask, segment_ids, label_ids = batch
-
+        #batch = tuple(t.to(device) for t in batch)
+            #input_ids, input_mask, segment_ids, label_ids = batch
+            batch.to(accelerator.device)
             with torch.no_grad():
-                outputs = model(input_ids, input_mask, segment_ids, label_ids)
-                tmp_eval_loss = outputs["logits"]
-                outputs = model(input_ids, input_mask, segment_ids)
-                logits = outputs["logits"]
+                outputs = model(**batch)
+                tmp_eval_loss = outputs.logits.argmax(dim = -1)
+                PRINT_DEBUG(tmp_eval_loss)
+                outputs = model(batch["input_ids"], batch["input_mask"], batch["segment_ids"])
+                logits = outputs.logits
 
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.to("cpu").numpy()
